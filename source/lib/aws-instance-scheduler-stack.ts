@@ -22,6 +22,8 @@ import * as lambda from '@aws-cdk/aws-lambda';
 import * as s3 from '@aws-cdk/aws-s3';
 import * as sns from '@aws-cdk/aws-sns';
 import * as events from '@aws-cdk/aws-events';
+import * as alarms from '@aws-cdk/aws-cloudwatch';
+import * as actions from '@aws-cdk/aws-cloudwatch-actions';
 import { ArnPrincipal, Effect, PolicyStatement } from '@aws-cdk/aws-iam';
 import { LambdaToDynamoDBProps, LambdaToDynamoDB } from '@aws-solutions-constructs/aws-lambda-dynamodb';
 import * as EventlambdaConstruct from '@aws-solutions-constructs/aws-events-rule-lambda';
@@ -42,7 +44,7 @@ export interface AwsInstanceSchedulerStackProps extends cdk.StackProps {
 /*
 * AWS instance scheduler stack, utilizes two cdk constructs, aws-lambda-dynamodb and aws-events-rule-lambda.
 * The stack has three dynamoDB tables defined for storing the state, configuration and maintenance information.
-* The stack also includes one lambda, which is scheduled using a AWS CloudWatch Event Rule. 
+* The stack also includes one lambda, which is scheduled using a AWS CloudWatch Event Rule.
 * The stack also includes a cloudwatch log group for the entire solution, encrycption key, encyrption key alias and SNS topic,
 * and the necessary AWS IAM Policies and IAM Roles. For more information on the architecture, refer to the documentation at
 * https://aws.amazon.com/solutions/implementations/instance-scheduler/?did=sl_card&trk=sl_card
@@ -53,6 +55,16 @@ export class AwsInstanceSchedulerStack extends cdk.Stack {
     super(scope, id, props);
 
     //Start CFN Parameters for instance scheduler.
+
+    const lambdaRolePath = new cdk.CfnParameter(this, 'LambdaRolePath', {
+      description: 'IAM role path for lambda execution role.',
+      type: "String"
+    });
+
+    const notificationsTopicArn = new cdk.CfnParameter(this, 'NotificationsTopicArn', {
+      description: 'Notifications SNS topic ARN for lambda failures.',
+      type: "String"
+    })
 
     const schedulingActive = new cdk.CfnParameter(this, 'SchedulingActive', {
       description: 'Activate or deactivate scheduling.',
@@ -109,7 +121,7 @@ export class AwsInstanceSchedulerStack extends cdk.Stack {
       allowedValues: ["Yes", "No"],
       default: "No"
     });
-    
+
     const enableSSMMaintenanceWindows = new cdk.CfnParameter(this, 'EnableSSMMaintenanceWindows', {
       description: 'Enable the solution to load SSM Maintenance Windows, so that they can be used for EC2 instance Scheduling.',
       type: 'String',
@@ -607,7 +619,7 @@ export class AwsInstanceSchedulerStack extends cdk.Stack {
 
     //End CFN parameters for instance scheduler.
 
-    //Start Mappings for instance scheduler. 
+    //Start Mappings for instance scheduler.
 
     const mappings = new cdk.CfnMapping(this, "mappings")
     mappings.setValue("TrueFalse", "Yes", "True")
@@ -634,7 +646,7 @@ export class AwsInstanceSchedulerStack extends cdk.Stack {
     //End Mappings for instance scheduler.
 
     /*
-    * Instance Scheduler solutions bucket reference.  
+    * Instance Scheduler solutions bucket reference.
     */
     const solutionsBucket = s3.Bucket.fromBucketAttributes(this, 'SolutionsBucket', {
       bucketName: props["solutionBucket"] + '-' + this.region
@@ -666,7 +678,7 @@ export class AwsInstanceSchedulerStack extends cdk.Stack {
 
     const schedulerRole = new iam.Role(this, "SchedulerRole", {
       assumedBy: compositePrincipal,
-      path: '/'
+      path: lambdaRolePath.valueAsString
     })
 
     //End instance scheduler scheduler role reference
@@ -707,13 +719,13 @@ export class AwsInstanceSchedulerStack extends cdk.Stack {
     //End instance scheduler encryption key and encryption key alias.
 
     /*
-    * Instance scheduler SNS Topic reference. 
+    * Instance scheduler SNS Topic reference.
     */
     const snsTopic = new sns.Topic(this, 'InstanceSchedulerSnsTopic', {
       masterKey: instanceSchedulerEncryptionKey
     });
 
-    //Start instance scheduler aws-lambda-dynamoDB construct reference. 
+    //Start instance scheduler aws-lambda-dynamoDB construct reference.
     const lambdaToDynamoDBProps: LambdaToDynamoDBProps = {
       lambdaFunctionProps: {
         functionName: Aws.STACK_NAME + '-InstanceSchedulerMain',
@@ -772,7 +784,7 @@ export class AwsInstanceSchedulerStack extends cdk.Stack {
       "SSEType": 'KMS'
     })
 
-    //End instance scheduler aws-lambda-dynamoDB construct reference. 
+    //End instance scheduler aws-lambda-dynamoDB construct reference.
 
     //Start instance scheduler configuration table dynamoDB Table reference.
 
@@ -999,8 +1011,8 @@ export class AwsInstanceSchedulerStack extends cdk.Stack {
       roles: [schedulerRole],
       policyName: 'EC2DynamoDBPolicy',
       statements: [
-        ec2PolicySSMStatement, 
-        ec2PolicyStatementforMisc, 
+        ec2PolicySSMStatement,
+        ec2PolicyStatementforMisc,
         ec2PolicyStatementForLogs
       ]
     })
@@ -1068,7 +1080,7 @@ export class AwsInstanceSchedulerStack extends cdk.Stack {
       resources: [cdk.Fn.sub("arn:${AWS::Partition}:rds:*:${AWS::AccountId}:cluster:*")]
     })
 
-    
+
     const schedulerPolicy = new iam.Policy(this, "SchedulerPolicy", {
       roles: [schedulerRole],
       policyName: 'SchedulerPolicy',
@@ -1083,7 +1095,7 @@ export class AwsInstanceSchedulerStack extends cdk.Stack {
       ]
     })
 
-    //Adding the EC2 and scheduling policy dependencies to the lambda. 
+    //Adding the EC2 and scheduling policy dependencies to the lambda.
     const lambdaFunction = lambdaToDynamoDb.lambdaFunction.node.defaultChild as lambda.CfnFunction
     lambdaFunction.addDependsOn(ec2DynamoDBPolicy.node.defaultChild as iam.CfnPolicy)
     lambdaFunction.addDependsOn(ec2Permissions.node.defaultChild as iam.CfnPolicy)
@@ -1107,6 +1119,26 @@ export class AwsInstanceSchedulerStack extends cdk.Stack {
         ]
       }
     }
+
+    const lambdaFailureAlarm = new alarms.Alarm(this, 'Alarm', {
+      metric: lambdaToDynamoDb.lambdaFunction.metric("Errors", {
+        period: cdk.Duration.seconds(300),
+        statistic: 'Sum',
+      }),
+      threshold: 0,
+      evaluationPeriods: 1,
+      comparisonOperator: alarms.ComparisonOperator.GREATER_THAN_THRESHOLD
+    })
+
+    lambdaFailureAlarm.addAlarmAction(new actions.SnsAction(sns.Topic.fromTopicArn(this, 'NotificationsTopic', notificationsTopicArn.valueAsString)))
+
+    const lambdaFailureAlarm_cfn_ref = lambdaFailureAlarm.node.defaultChild as alarms.CfnAlarm
+    lambdaFailureAlarm_cfn_ref.overrideLogicalId('MainLambdaFailureAlarm')
+
+    // new cdk.CfnOutput(this, 'LambdaFailureAlarmArn', {
+    //   value: lambdaFailureAlarm.alarmArn,
+    //   description: 'ARN of the scheduler lambda failure alarm.'
+    // })
 
     //Cloud Formation cfn references for ensuring the resource names are similar to earlier releases, and additional metadata for the cfn nag rules.
     const instanceSchedulerEncryptionKey_cfn_ref = instanceSchedulerEncryptionKey.node.defaultChild as kms.CfnKey

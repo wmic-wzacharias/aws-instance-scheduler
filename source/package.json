@@ -32,6 +32,7 @@
     "@aws-cdk/aws-s3": "1.96.0",
     "@aws-cdk/aws-sns": "1.96.0",
     "@aws-cdk/core": "1.96.0",
+    "@aws-cdk/aws-cloudwatch-actions": "1.96.0",
     "@aws-solutions-constructs/aws-events-rule-lambda": "1.96.0",
     "@aws-solutions-constructs/aws-lambda-dynamodb": "1.96.0",
     "@aws-solutions-constructs/core": "1.96.0",

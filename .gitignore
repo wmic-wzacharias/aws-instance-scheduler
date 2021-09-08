@@ -115,3 +115,5 @@ source/deploy
 source/code/sample_events
 .vscode
 __pycache__
+
+package-lock.json
