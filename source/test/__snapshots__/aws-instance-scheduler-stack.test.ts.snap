@@ -639,6 +639,10 @@ Object {
       "Description": "Enable the solution to load SSM Maintenance Windows, so that they can be used for EC2 instance Scheduling.",
       "Type": "String",
     },
+    "LambdaRolePath": Object {
+      "Description": "IAM role path for lambda execution role.",
+      "Type": "String",
+    },
     "LogRetentionDays": Object {
       "AllowedValues": Array [
         "1",
@@ -681,6 +685,10 @@ Object {
       "Default": 128,
       "Description": "Size of the Lambda function running the scheduler, increase size when processing large numbers of instances.",
       "Type": "Number",
+    },
+    "NotificationsTopicArn": Object {
+      "Description": "Notifications SNS topic ARN for lambda failures.",
+      "Type": "String",
     },
     "Regions": Object {
       "Description": "List of regions in which instances are scheduled, leave blank for current region only.",
@@ -1196,6 +1204,31 @@ Object {
       },
       "Type": "AWS::Lambda::Function",
     },
+    "MainLambdaFailureAlarm": Object {
+      "Properties": Object {
+        "AlarmActions": Array [
+          Object {
+            "Ref": "NotificationsTopicArn",
+          },
+        ],
+        "ComparisonOperator": "GreaterThanThreshold",
+        "Dimensions": Array [
+          Object {
+            "Name": "FunctionName",
+            "Value": Object {
+              "Ref": "Main",
+            },
+          },
+        ],
+        "EvaluationPeriods": 1,
+        "MetricName": "Errors",
+        "Namespace": "AWS/Lambda",
+        "Period": 300,
+        "Statistic": "Sum",
+        "Threshold": 0,
+      },
+      "Type": "AWS::CloudWatch::Alarm",
+    },
     "MaintenanceWindowTable": Object {
       "DeletionPolicy": "Delete",
       "Properties": Object {
@@ -1499,7 +1532,9 @@ Object {
           ],
           "Version": "2012-10-17",
         },
-        "Path": "/",
+        "Path": Object {
+          "Ref": "LambdaRolePath",
+        },
       },
       "Type": "AWS::IAM::Role",
     },
